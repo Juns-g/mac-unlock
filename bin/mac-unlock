@@ -1,0 +1,55 @@
+#!/bin/sh
+# LaunchServices preserves the App's permission identity; direct native exec may not.
+set -eu
+help() {
+    cat <<'HELP'
+mac-unlock [--app /path/MacUnlock.app] status
+mac-unlock [--app /path/MacUnlock.app] preflight [--clear-first]
+mac-unlock [--app /path/MacUnlock.app] unlock --dry-run [--clear-first]
+mac-unlock unlock --authorize [--clear-first]
+mac-unlock relock --authorize
+mac-unlock setup --local-user  (human only, masked local UI)
+No arguments: help only. Default App: ~/Applications/MacUnlock.app
+Exit: 0 confirmed/no-op, 2 blocked, 3 attempted but unconfirmed, 64 usage.
+HELP
+}
+app="$HOME/Applications/MacUnlock.app"
+override=false
+if [ "${1:-}" = '--app' ]; then
+    [ "$#" -ge 2 ] || { help >&2; exit 64; }
+    app=$2; override=true; shift 2
+fi
+[ "$#" -gt 0 ] || { help; exit 0; }
+# Compare the full grammar before launching; never forward arbitrary arguments.
+case "$*" in
+    '--help'|'help') help; exit 0 ;;
+    'status'|'preflight'|'preflight --clear-first'|'unlock --dry-run'|'unlock --dry-run --clear-first') ;;
+    'unlock --authorize'|'unlock --authorize --clear-first'|'relock --authorize'|'setup --local-user')
+        [ "$override" = false ] || { echo 'App override is read-only.' >&2; exit 64; } ;;
+    *) help >&2; exit 64 ;;
+esac
+# Individual argument boundaries must also match the grammar (no embedded spaces).
+for arg in "$@"; do
+    case "$arg" in status|preflight|unlock|relock|setup|--dry-run|--authorize|--clear-first|--local-user) ;;
+        *) help >&2; exit 64 ;;
+    esac
+done
+[ "$(basename -- "$app")" = MacUnlock.app ] &&
+[ "$(/usr/bin/plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist" 2>/dev/null)" = com.example.MacUnlock ] || {
+    echo 'Expected MacUnlock.app (com.example.MacUnlock); build and install first.' >&2; exit 2;
+}
+/usr/bin/codesign --verify --deep --strict "$app" 2>/dev/null || exit 2
+umask 077
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/mac-unlock-cli.XXXXXX")
+trap 'rm -rf -- "$tmp"' EXIT HUP INT TERM
+/usr/bin/open -g -j -n --stdout "$tmp/receipt.json" --stderr "$tmp/stderr" "$app" --args "$@" || exit 2
+n=0
+while [ "$n" -lt 100 ]; do
+    if code=$(/usr/bin/plutil -extract code raw -o - "$tmp/receipt.json" 2>/dev/null); then
+        case "$code" in 0|2|3|64) cat "$tmp/receipt.json"; exit "$code" ;; esac
+    fi
+    n=$((n + 1)); sleep 0.2
+done
+# A timeout is not a retry invitation; the App may still be completing its attempt.
+printf '%s\n' '{"code":3,"result":"receipt_timeout_no_retry"}'
+exit 3
