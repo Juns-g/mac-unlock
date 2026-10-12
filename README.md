@@ -4,7 +4,7 @@
 
 A native, on-demand helper for unlocking your own ordinary Mac lock screen, providing JSON receipts for local automation.
 
-Runs only inside an already logged-in, verified console session. Does not include Bluetooth, network listeners, daemons, scheduled tasks, or wake support. Does not support FileVault, initial login, or logged-out sessions.
+Runs only inside an already logged-in, verified console session. Does not include Bluetooth, network listeners, daemons, scheduled tasks, or built-in wake support. Does not support waking a sleeping computer, FileVault, initial login, or logged-out sessions. Display preparation is a separate, explicitly authorized step described below.
 
 ## Build and install
 
@@ -46,6 +46,27 @@ mac-unlock unlock --authorize --clear-first
 By default, unlock requires a verified empty password field; if macOS hides the character count, the operation blocks. When explicitly authorized, `--clear-first` dispatches Command-A/Delete to the verified field before a single password submission. Target and credential guards run first; credential read failure aborts immediately without clearing. Receipts record observed empty-field evidence without claiming independent verification of clearing.
 
 Exit codes: `0` confirmed result or no-op; `2` blocked; `3` input attempted or completion unknown; `64` invalid arguments. Failures or receipt timeouts must not trigger automatic retries.
+
+### Prepare an idle display before unlocking
+
+A focused, enabled secure text field can remain accessible to the OS while the lock-screen password interface is hidden. Therefore, a `ready` preflight is necessary but is not proof that the visible interface is ready to receive input. Never use a password submission to wake the display.
+
+For an ordinary locked session, when the user has authorized unlocking **and** display preparation, macOS's system `caffeinate` command can briefly declare user activity without changing permanent power settings:
+
+```sh
+caffeinate -u mac-unlock preflight --clear-first
+# Check the JSON: verified session, locked state, permissions, target, and ready.
+# Separately verify that the intended lock-screen password control is actually visible.
+# Only with explicit authorization for unlocking and clearing that verified field:
+caffeinate -u mac-unlock unlock --authorize --clear-first
+mac-unlock status
+```
+
+`caffeinate` prepares the display; it does not authenticate, prove the field is empty, bypass a guard, or resume a computer from system sleep. Here its assertion lasts for the invoked command; macOS ignores `-t` when a utility is supplied, so adding `-t 45` would not impose a 45-second deadline. The helper still performs its own target, session, permission, credential, and single-attempt checks. Read the App's JSON receipt, not merely the launcher's exit status. `unlocked_confirmed` followed by a fresh `status` showing the same verified session unlocked is the success criterion. An `already_unlocked` result is still only a no-op.
+
+If an attempt fails, stop rather than automatically clearing or resubmitting. Read-only system logs containing `View is hidden`, `userIsActiveCheck` returning `0`, or `_wakeForIncomingMessage` followed by `don't start the Unlock` are clues that the interface was not ready; they do not prove an incorrect password. A new attempt requires a fresh, informed user request, a corrected and independently verified prerequisite, and a new preflight—not an unchanged retry loop. Do not print or collect password contents while investigating.
+
+This preparation sequence succeeded with the previously validated native implementation after an idle-display failure. It does not change the public App or its identity, and does not claim that this public branding build has passed a new credential-entry test.
 
 ## Safety and limits
 
